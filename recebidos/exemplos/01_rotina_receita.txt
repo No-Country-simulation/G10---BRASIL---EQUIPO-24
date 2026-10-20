@@ -1,0 +1,12 @@
+CLINICA SAO PAULO SAUDE - RECEITUARIO MEDICO
+Paciente: Maria Aparecida Souza, 34 anos.
+Medico: Dr. Joao Pedro Alves - CRM-SP 123456
+Data: 10/10/2026
+
+Hipotese diagnostica: Faringite aguda (CID J02.9).
+
+Prescricao:
+1) Amoxicilina 500 mg - 1 capsula via oral a cada 8 horas por 7 dias.
+2) Dipirona 500 mg - 1 comprimido a cada 6 horas, se dor ou febre.
+
+Retorno em 7 dias se persistirem os sintomas.

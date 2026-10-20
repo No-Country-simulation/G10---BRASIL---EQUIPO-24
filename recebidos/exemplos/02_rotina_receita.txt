@@ -1,0 +1,9 @@
+
+DOC-CLIN-2026-8942,
+TXT,
+HOSPITAL SANTA LUCIA - LAUDO DE EXAME RADIOLOGICO. Paciente: Carlos
+Eduardo Mendes, 52 anos. Solicitante: Dra. Renata Silveira CRM-SP 145892. Exame: Tomografia
+de Torax com contraste. Indicacao: Suspeita de embolia pulmonar aguda, dispneia subita.
+Falha de enchimento em arteria pulmonar principal direita compativel com TEP agudo.
+Quadro compativel com Tromboembolismo Pulmonar Agudo. Sugere-se correlacao clinica
+urgente,Pronto_Socorro

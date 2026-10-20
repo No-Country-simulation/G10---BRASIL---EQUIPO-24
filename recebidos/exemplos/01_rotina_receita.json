@@ -1,0 +1,27 @@
+{
+  "paciente": {
+    "nome": "Maria Aparecida Souza",
+    "idade": 34
+  },
+  "medico_solicitante": {
+    "nome": "Dr. Joao Pedro Alves",
+    "crm": "123456-SP"
+  },
+  "exame_realizado": null,
+  "diagnostico_principal": "Faringite Aguda",
+  "cid_sugerido": "J02.9",
+  "medicamentos": [
+    {
+      "nome": "Amoxicilina",
+      "dosagem": "500 mg",
+      "posologia": "1 capsula via oral a cada 8 horas por 7 dias",
+      "legivel": true
+    },
+    {
+      "nome": "Dipirona",
+      "dosagem": "500 mg",
+      "posologia": "1 comprimido a cada 6 horas, se dor ou febre",
+      "legivel": true
+    }
+  ]
+}
