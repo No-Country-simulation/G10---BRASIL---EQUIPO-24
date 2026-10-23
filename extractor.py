@@ -27,13 +27,10 @@ from pathlib import Path
 from typing import Optional, Union
 
 from pydantic import ValidationError
-
 from schemas import DadosExtraidos
 
-# Modelo padrão. Pode trocar sem mexer no código: GEMINI_MODEL=... no .env
 MODELO_PADRAO = "gemini-3.6-flash"
 
-# 1 tentativa normal + 1 retentativa com o erro explicado ao modelo
 MAX_TENTATIVAS = 2
 
 MIME_POR_EXTENSAO = {
@@ -102,6 +99,7 @@ def criar_cliente():
 
         load_dotenv()
     except ImportError:
+
         pass
 
     chave = os.getenv("GEMINI_API_KEY")
@@ -130,10 +128,15 @@ def mime_por_extensao(caminho: Union[str, Path]) -> str:
     return MIME_POR_EXTENSAO[extensao]
 
 
-def _montar_conteudo(conteudo: Union[str, bytes], mime_type: Optional[str]) -> list:
-    """Monta a mensagem enviada ao Gemini: prompt + documento."""
+def montar_conteudo(
+    conteudo: Union[str, bytes], mime_type: Optional[str], prompt: str = PROMPT_EXTRACAO
+) -> list:
+    """Monta a mensagem enviada ao Gemini: prompt + documento.
+
+    O parâmetro `prompt` permite reaproveitar esta função no classificador (Etapa 3).
+    """
     if isinstance(conteudo, str):
-        return [PROMPT_EXTRACAO, f"DOCUMENTO:\n<<<\n{conteudo}\n>>>"]
+        return [prompt, f"DOCUMENTO:\n<<<\n{conteudo}\n>>>"]
 
     if not mime_type:
         raise ErroExtracao("Para enviar bytes (PDF/imagem), informe o mime_type.")
@@ -141,12 +144,52 @@ def _montar_conteudo(conteudo: Union[str, bytes], mime_type: Optional[str]) -> l
     from google.genai import types
 
     parte = types.Part.from_bytes(data=conteudo, mime_type=mime_type)
-    return [PROMPT_EXTRACAO, parte, "Extraia os dados do documento acima."]
+    return [prompt, parte, "Analise o documento acima e responda apenas com o JSON."]
 
 
 # ---------------------------------------------------------------------------
-# 3) FUNÇÃO PRINCIPAL
+# 3) FUNÇÃO GENÉRICA: chama o Gemini, valida e tenta de novo se vier errado
+# Usada tanto pela extração (Etapa 2) quanto pela classificação (Etapa 3).
 # ---------------------------------------------------------------------------
+def gerar_json_validado(mensagem: list, validar, client, modelo: Optional[str] = None):
+    """Pede um JSON ao Gemini e o valida com `validar` (ex.: DadosExtraidos.model_validate).
+
+    Se a resposta for inválida, mostra o erro ao modelo e tenta mais uma vez.
+    Levanta ErroExtracao se não conseguir (ou se a chamada ao Gemini falhar).
+    """
+    modelo = modelo or os.getenv("GEMINI_MODEL", MODELO_PADRAO)
+    ultimo_erro: Optional[Exception] = None
+
+    for tentativa in range(1, MAX_TENTATIVAS + 1):
+        try:
+            resposta = client.models.generate_content(
+                model=modelo,
+                contents=mensagem,
+                config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0,
+                },
+            )
+            texto = resposta.text or ""
+        except Exception as e:
+            raise ErroExtracao(f"Falha ao chamar o Gemini: {e}") from e
+
+        try:
+            return validar(json.loads(limpar_json(texto)))
+        except (json.JSONDecodeError, ValidationError) as e:
+            ultimo_erro = e
+            if tentativa < MAX_TENTATIVAS:
+                # Mostramos o erro ao modelo para ele se corrigir.
+                mensagem = mensagem + [
+                    f"Sua resposta anterior foi rejeitada: {e}\n"
+                    "Responda novamente apenas com o JSON corrigido."
+                ]
+
+    raise ErroExtracao(
+        f"O Gemini não devolveu um JSON válido após {MAX_TENTATIVAS} tentativas: {ultimo_erro}"
+    )
+
+
 def extrair_dados(
     conteudo: Union[str, bytes],
     mime_type: Optional[str] = None,
@@ -168,49 +211,20 @@ def extrair_dados(
         raise ErroExtracao("Documento vazio.")
 
     client = client or criar_cliente()
-    modelo = modelo or os.getenv("GEMINI_MODEL", MODELO_PADRAO)
-    mensagem = _montar_conteudo(conteudo, mime_type)
-
-    ultimo_erro: Optional[Exception] = None
-
-    for tentativa in range(1, MAX_TENTATIVAS + 1):
-        # --- chamada ao Gemini ---
-        try:
-            resposta = client.models.generate_content(
-                model=modelo,
-                contents=mensagem,
-                config={
-                    "response_mime_type": "application/json",
-                    "temperature": 0,
-                },
-            )
-            texto = resposta.text or ""
-        except Exception as e:
-            raise ErroExtracao(f"Falha ao chamar o Gemini: {e}") from e
-
-        try:
-            return DadosExtraidos.model_validate(json.loads(limpar_json(texto)))
-        except (json.JSONDecodeError, ValidationError) as e:
-            ultimo_erro = e
-            if tentativa < MAX_TENTATIVAS:
-                mensagem = mensagem + [
-                    f"Sua resposta anterior foi rejeitada: {e}\n"
-                    "Responda novamente apenas com o JSON corrigido."
-                ]
-
-    raise ErroExtracao(
-        f"O Gemini não devolveu um JSON válido após {MAX_TENTATIVAS} tentativas: {ultimo_erro}"
-    )
+    mensagem = montar_conteudo(conteudo, mime_type)
+    return gerar_json_validado(mensagem, DadosExtraidos.model_validate, client, modelo)
 
 
 def extrair_de_arquivo(caminho: Union[str, Path], **kwargs) -> DadosExtraidos:
-    """Atalho: lê um arquivo do disco (.txt, .pdf, .png, .jpg) e extrai os dados."""
     caminho = Path(caminho)
     if caminho.suffix.lower() == ".txt":
         return extrair_dados(caminho.read_text(encoding="utf-8"), **kwargs)
     return extrair_dados(caminho.read_bytes(), mime_type=mime_por_extensao(caminho), **kwargs)
 
 
+# ---------------------------------------------------------------------------
+# 4) USO PELO TERMINAL:  python extractor.py exemplos/01_rotina_receita.txt
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Uso: python extractor.py <arquivo .txt|.pdf|.png|.jpg>")
