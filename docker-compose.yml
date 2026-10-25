@@ -1,0 +1,26 @@
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    container_name: seaweedfs
+    ports:
+      - "9333:9333"   # Porta do Master
+      - "8888:8888"   # Porta do Filer (Interface Web / WebDAV)
+      - "8333:8333"   # Porta do Volume / API S3
+    volumes:
+      - seaweed_data:/data
+    command: server -dir=/data -s3
+    restart: unless-stopped
+
+volumes:
+  seaweed_data:
+    driver: local
+
+# Subir o SeaweedFS com Docker:
+# docker run -d --name seaweedfs -p 9333:9333 -p 8888:8888 -p 8333:8333 \
+#      -v seaweed_data:/data chrislusf/seaweedfs server -dir=/data -s3
+
+# Para testar
+# python storage.py --testar, que deve gravar, ler e apagar um objeto de teste.
+#
+# Consultar
+# http://localhost:8888/buckets/mediflow-documentos-clinicos/
