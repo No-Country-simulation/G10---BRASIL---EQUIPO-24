@@ -20,12 +20,13 @@ from datetime import datetime
 
 import streamlit as st
 
-# import auditoria
+import auditoria
 from config import CONFIG_PADRAO, carregar_config, salvar_config
 from extractor import ErroExtracao, criar_cliente
 from graph import triar_documento
 from schemas import DestinoRoteamento, TipoDocumento
 from storage import criar_armazenamento
+from diagnostico import diagnosticar
 
 st.set_page_config(page_title="MediFlow", page_icon="🏥", layout="wide")
 
@@ -117,109 +118,109 @@ with aba_triagem:
 # ===========================================================================
 # ABA 2: AUDITORIA HUMANA
 # ===========================================================================
-# with aba_auditoria:
-#     pendentes = auditoria.listar_pendentes(armazenamento)
-#     st.subheader(f"Aguardando revisão: {len(pendentes)}")
-#     if not pendentes:
-#         st.info("Nenhum documento pendente. 🎉")
-#     else:
-#         escolhido = st.selectbox("Documento", pendentes)
-#         registro = auditoria.carregar_pendente(armazenamento, escolhido)
-#         resposta = registro["resposta"]
-#         meta = registro["metadados"]
+with aba_auditoria:
+    pendentes = auditoria.listar_pendentes(armazenamento)
+    st.subheader(f"Aguardando revisão: {len(pendentes)}")
+    if not pendentes:
+        st.info("Nenhum documento pendente. 🎉")
+    else:
+        escolhido = st.selectbox("Documento", pendentes)
+        registro = auditoria.carregar_pendente(armazenamento, escolhido)
+        resposta = registro["resposta"]
+        meta = registro["metadados"]
 
-#         col1, col2 = st.columns(2)
-#         with col1:
-#             st.markdown("#### Por que foi para revisão?")
-#             for motivo in meta["avaliacao"]["motivos_revisao"] or ["(sem motivos registrados)"]:
-#                 st.warning(motivo)
-#             st.metric("Score final de confiança", meta["avaliacao"]["score_final"])
-#             st.write("**Classificação:**", resposta["classificacao"]["tipo_documento"])
+        col1, col2 = st.columns(2)
+        with col1:
+            st.markdown("#### Por que foi para revisão?")
+            for motivo in meta["avaliacao"]["motivos_revisao"] or ["(sem motivos registrados)"]:
+                st.warning(motivo)
+            st.metric("Score final de confiança", meta["avaliacao"]["score_final"])
+            st.write("**Classificação:**", resposta["classificacao"]["tipo_documento"])
 
-#             original = auditoria.carregar_original(armazenamento, escolhido)
-#             if original:
-#                 nome, bytes_ = original
-#                 st.markdown("#### Documento original")
-#                 if nome.endswith(".txt"):
-#                     st.text(bytes_.decode("utf-8", errors="replace"))
-#                 elif nome.endswith((".png", ".jpg", ".webp")):
-#                     st.image(bytes_)
-#                 else:
-#                     st.download_button("Baixar PDF original", bytes_, file_name=nome.split("/")[-1])
+            original = auditoria.carregar_original(armazenamento, escolhido)
+            if original:
+                nome, bytes_ = original
+                st.markdown("#### Documento original")
+                if nome.endswith(".txt"):
+                    st.text(bytes_.decode("utf-8", errors="replace"))
+                elif nome.endswith((".png", ".jpg", ".webp")):
+                    st.image(bytes_)
+                else:
+                    st.download_button("Baixar PDF original", bytes_, file_name=nome.split("/")[-1])
 
-#         with col2:
-#             st.markdown("#### Dados extraídos (editáveis)")
-#             editado = st.text_area(
-#                 "JSON", value=json.dumps(resposta["dados_extraidos"], ensure_ascii=False, indent=2),
-#                 height=330, key=f"json_{escolhido}",
-#             )
-#             auditor = st.text_input("Seu nome (auditor)", key=f"aud_{escolhido}")
-#             obs = st.text_input("Observação", key=f"obs_{escolhido}")
-#             b1, b2 = st.columns(2)
+        with col2:
+            st.markdown("#### Dados extraídos (editáveis)")
+            editado = st.text_area(
+                "JSON", value=json.dumps(resposta["dados_extraidos"], ensure_ascii=False, indent=2),
+                height=330, key=f"json_{escolhido}",
+            )
+            auditor = st.text_input("Seu nome (auditor)", key=f"aud_{escolhido}")
+            obs = st.text_input("Observação", key=f"obs_{escolhido}")
+            b1, b2 = st.columns(2)
 
-#             def _decidir(decisao: str):
-#                 try:
-#                     corrigido = json.loads(editado)
-#                     caminho = auditoria.registrar_decisao(
-#                         armazenamento, escolhido, decisao, auditor, obs,
-#                         dados_corrigidos=corrigido if corrigido != resposta["dados_extraidos"] else None,
-#                     )
-#                     st.success(f"Registrado em `{caminho}`")
-#                     st.rerun()
-#                 except json.JSONDecodeError as e:
-#                     st.error(f"JSON inválido: {e}")
-#                 except auditoria.ErroAuditoria as e:
-#                     st.error(str(e))
+            def _decidir(decisao: str):
+                try:
+                    corrigido = json.loads(editado)
+                    caminho = auditoria.registrar_decisao(
+                        armazenamento, escolhido, decisao, auditor, obs,
+                        dados_corrigidos=corrigido if corrigido != resposta["dados_extraidos"] else None,
+                    )
+                    st.success(f"Registrado em `{caminho}`")
+                    st.rerun()
+                except json.JSONDecodeError as e:
+                    st.error(f"JSON inválido: {e}")
+                except auditoria.ErroAuditoria as e:
+                    st.error(str(e))
 
-#             if b1.button("✅ Aprovar", key=f"ap_{escolhido}"):
-#                 _decidir("aprovado")
-#             if b2.button("❌ Rejeitar", key=f"rj_{escolhido}"):
-#                 _decidir("rejeitado")
+            if b1.button("✅ Aprovar", key=f"ap_{escolhido}"):
+                _decidir("aprovado")
+            if b2.button("❌ Rejeitar", key=f"rj_{escolhido}"):
+                _decidir("rejeitado")
 
-# # ===========================================================================
-# # ABA 3: REGRAS DE TRIAGEM (diferencial)
-# # ===========================================================================
-# with aba_regras:
-#     cfg = carregar_config()
-#     st.subheader("Regras de triagem (sem mexer no código)")
-#     limiar = st.slider("Limiar de confiança (abaixo disso → revisão humana)", 0.0, 1.0, float(cfg["limiar_confianca"]), 0.01)
-#     palavras = st.text_area(
-#         "Palavras de urgência (uma por linha)", value="\n".join(cfg["palavras_urgencia"]), height=220
-#     )
-#     st.markdown("**Destino por tipo de documento** (caso padrão)")
-#     destinos = [d.value for d in DestinoRoteamento if d != DestinoRoteamento.REVISAO_HUMANA]
-#     novo_mapa = {}
-#     for tipo in TipoDocumento:
-#         if tipo == TipoDocumento.DESCONHECIDO:
-#             continue
-#         atual = cfg["destino_por_tipo"].get(tipo.value, destinos[0])
-#         novo_mapa[tipo.value] = st.selectbox(tipo.value, destinos, index=destinos.index(atual) if atual in destinos else 0, key=f"dest_{tipo.name}")
+# ===========================================================================
+# ABA 3: REGRAS DE TRIAGEM (diferencial)
+# ===========================================================================
+with aba_regras:
+    cfg = carregar_config()
+    st.subheader("Regras de triagem (sem mexer no código)")
+    limiar = st.slider("Limiar de confiança (abaixo disso → revisão humana)", 0.0, 1.0, float(cfg["limiar_confianca"]), 0.01)
+    palavras = st.text_area(
+        "Palavras de urgência (uma por linha)", value="\n".join(cfg["palavras_urgencia"]), height=220
+    )
+    st.markdown("**Destino por tipo de documento** (caso padrão)")
+    destinos = [d.value for d in DestinoRoteamento if d != DestinoRoteamento.REVISAO_HUMANA]
+    novo_mapa = {}
+    for tipo in TipoDocumento:
+        if tipo == TipoDocumento.DESCONHECIDO:
+            continue
+        atual = cfg["destino_por_tipo"].get(tipo.value, destinos[0])
+        novo_mapa[tipo.value] = st.selectbox(tipo.value, destinos, index=destinos.index(atual) if atual in destinos else 0, key=f"dest_{tipo.name}")
 
-#     c1, c2 = st.columns(2)
-#     if c1.button("💾 Salvar regras", type="primary"):
-#         cfg.update(
-#             limiar_confianca=limiar,
-#             palavras_urgencia=[p.strip() for p in palavras.splitlines() if p.strip()],
-#         )
-#         cfg["destino_por_tipo"] = novo_mapa
-#         try:
-#             salvar_config(cfg)
-#             st.success("Regras salvas! Valem a partir da próxima triagem.")
-#         except ValueError as e:
-#             st.error(str(e))
-#     if c2.button("↩️ Restaurar padrão"):
-#         salvar_config(CONFIG_PADRAO)
-#         st.rerun()
+    c1, c2 = st.columns(2)
+    if c1.button("💾 Salvar regras", type="primary"):
+        cfg.update(
+            limiar_confianca=limiar,
+            palavras_urgencia=[p.strip() for p in palavras.splitlines() if p.strip()],
+        )
+        cfg["destino_por_tipo"] = novo_mapa
+        try:
+            salvar_config(cfg)
+            st.success("Regras salvas! Valem a partir da próxima triagem.")
+        except ValueError as e:
+            st.error(str(e))
+    if c2.button("↩️ Restaurar padrão"):
+        salvar_config(CONFIG_PADRAO)
+        st.rerun()
 
 # ===========================================================================
 # ABA 4: HISTÓRICO
 # ===========================================================================
-# with aba_historico:
-#     st.subheader("Objetos no bucket")
-#     prefixo = st.selectbox("Pasta", ["", "recebidos/", "processados/", "auditoria_humana/"], format_func=lambda x: x or "(tudo)")
-#     objetos = armazenamento.listar(prefixo)
-#     st.write(f"{len(objetos)} objeto(s)")
-#     st.dataframe({"objeto": objetos}, width="stretch")
-#     abrir = st.selectbox("Ver conteúdo de um .json", [""] + [o for o in objetos if o.endswith(".json")])
-#     if abrir:
-#         st.json(armazenamento.ler_json(abrir))
+with aba_historico:
+    st.subheader("Objetos no bucket")
+    prefixo = st.selectbox("Pasta", ["", "recebidos/", "processados/", "auditoria_humana/"], format_func=lambda x: x or "(tudo)")
+    objetos = armazenamento.listar(prefixo)
+    st.write(f"{len(objetos)} objeto(s)")
+    st.dataframe({"objeto": objetos}, width="stretch")
+    abrir = st.selectbox("Ver conteúdo de um .json", [""] + [o for o in objetos if o.endswith(".json")])
+    if abrir:
+        st.json(armazenamento.ler_json(abrir))

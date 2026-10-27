@@ -29,7 +29,7 @@ from typing import Optional, Union
 from pydantic import ValidationError
 from schemas import DadosExtraidos
 
-MODELO_PADRAO = "gemini-3.6-flash"
+MODELO_PADRAO = "gemini-3.5-flash-lite"
 
 MAX_TENTATIVAS = 2
 
@@ -99,7 +99,6 @@ def criar_cliente():
 
         load_dotenv()
     except ImportError:
-
         pass
 
     chave = os.getenv("GEMINI_API_KEY")
@@ -145,6 +144,46 @@ def montar_conteudo(
 
     parte = types.Part.from_bytes(data=conteudo, mime_type=mime_type)
     return [prompt, parte, "Analise o documento acima e responda apenas com o JSON."]
+
+#
+from dataclasses import dataclass
+
+@dataclass
+class DiagnosticoErro:
+    titulo: str
+    explicacao: str
+    acao: str
+    temporario: bool
+
+def diagnosticar(bruto: str) -> DiagnosticoErro:
+    """Analisa o erro bruto e retorna uma mensagem amigável para o usuário."""
+    texto_erro = str(bruto).lower()
+
+    # Exemplo de tratamento para erro de limite de requisições (Rate Limit)
+    if "rate_limit" in texto_erro or "429" in texto_erro:
+        return DiagnosticoErro(
+            titulo="Limite de requisições atingido",
+            explicacao="O provedor de IA recebeu muitas chamadas em pouco tempo.",
+            acao="Aguarde um minuto e tente processar o documento novamente.",
+            temporario=True
+        )
+
+    # Exemplo de tratamento para erro de arquivo muito grande ou formato incorreto
+    if "format" in texto_erro or "size" in texto_erro:
+        return DiagnosticoErro(
+            titulo="Formato ou tamanho inválido",
+            explicacao="O arquivo enviado pode estar corrompido ou é pesado demais para a API.",
+            acao="Verifique o tamanho do arquivo e tente enviar uma versão menor ou em formato texto.",
+            temporario=False
+        )
+
+    # Erro genérico padrão caso não caia nos filtros acima
+    return DiagnosticoErro(
+        titulo="Falha na análise do documento",
+        explicacao="Ocorreu um erro técnico inesperado durante a extração dos dados.",
+        acao="Tente reprocessar o documento ou contate o suporte do MediFlow se o problema persistir.",
+        temporario=False
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +259,9 @@ def extrair_de_arquivo(caminho: Union[str, Path], **kwargs) -> DadosExtraidos:
     if caminho.suffix.lower() == ".txt":
         return extrair_dados(caminho.read_text(encoding="utf-8"), **kwargs)
     return extrair_dados(caminho.read_bytes(), mime_type=mime_por_extensao(caminho), **kwargs)
+
+
+
 
 
 # ---------------------------------------------------------------------------

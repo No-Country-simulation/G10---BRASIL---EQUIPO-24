@@ -42,7 +42,7 @@ from schemas import (
     RespostaTriagem,
     TipoDocumento,
 )
-# from storage import ArmazenamentoBase, criar_armazenamento
+from storage import ArmazenamentoBase, criar_armazenamento
 
 
 class EstadoTriagem(TypedDict, total=False):
