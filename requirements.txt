@@ -1,11 +1,20 @@
-pydantic>=2.5
-pytest>=8.0
+#Regras de Negócio
 google-genai
 langgraph
-fastapi
+python-dotenv
+
 streamlit
 oci
 python-dotenv
 
-#SDK da SeaweedFS local (Object Storage)
+#API e Web
+fastapi
+uvicorn
+python-multipart
+
+#Testes
+pytest
+pydantic
+
+#Banco de dados SDK da SeaweedFS local (Object Storage)
 boto3
