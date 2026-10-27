@@ -1,143 +1,106 @@
-# MediFlow
+# 🏥 MediFlow
 ### Agente autônomo para triagem, extração e roteamento de documentos clínicos
 
-Projeto desenvolvido no **Hackathon ONE G10** (Oracle Next Education & Alura), pela plataforma NoCountry.
+Projeto da **Equipe 24** no **Hackathon ONE G10** (Oracle Next Education & Alura), pela plataforma NoCountry.
 
 ## Resumo
 
-O MediFlow é um agente de inteligência artificial que recebe documentos clínicos e administrativos (laudos, receitas, guias de autorização, atestados e relatórios), identifica o tipo de cada um, extrai os dados essenciais em formato estruturado (JSON) e decide para qual área encaminhá-lo.
+O MediFlow recebe documentos clínicos e administrativos (laudos, receitas, guias, relatórios de alta e atestados) em **texto, PDF ou imagem**, identifica o tipo, extrai os dados essenciais em JSON validado e decide para onde encaminhar cada um.
 
-Casos urgentes seguem direto para a equipe médica. Quando há dados ilegíveis, faltando ou inconsistentes, o documento vai para a revisão de um auditor humano, garantindo mais segurança. Já os casos padrão são encaminhados sem intervenção manual.
-
-
+Casos urgentes vão direto para a fila de emergência, com alerta. Documentos duvidosos, incompletos ou ilegíveis vão para a **revisão de uma pessoa**. Os casos padrão seguem para o setor correto sem intervenção manual.
 
 ## O problema
 
-Hospitais, laboratórios e operadoras de saúde recebem todos os dias milhares de documentos diferentes: laudos, receitas, guias de autorização (TISS/TUSS), pedidos de exames e relatórios cirúrgicos. Hoje, equipes administrativas leem esses documentos manualmente para digitar os dados em sistemas legados.
+Hospitais, clínicas, laboratórios e operadoras recebem milhares de documentos por dia, e equipes administrativas os leem manualmente para digitar dados em sistemas legados. Isso é lento, caro e sujeito a erros, e atrasos podem prejudicar pacientes em urgência e gerar glosas em autorizações.
 
-Esse processo é lento, caro e sujeito a erros de digitação. Além disso, atrasos no encaminhamento podem prejudicar pacientes em quadros de urgência, e falhas ou demoras nas autorizações de exames e medicamentos geram prejuízos financeiros, como as glosas hospitalares.
-
-## Público-alvo
-
-- Hospitais e clínicas médicas
-- Laboratórios
-- Operadoras de saúde
-
-Dentro dessas organizações, o MediFlow atende equipes como auditoria de autorizações, farmácia hospitalar, prontuário eletrônico e a equipe médica de plantão, que recebem os documentos já classificados e com os dados extraídos.
-
+**Público-alvo:** hospitais, clínicas, laboratórios e operadoras de saúde (equipes de auditoria, farmácia, prontuário e plantão médico).
 
 ## Como funciona
 
-O documento percorre seis etapas, do recebimento até o armazenamento:
+O fluxo é um **grafo de decisão em LangGraph**, com etapas e desvios condicionais:
 
-1. **Recebimento:** o agente recebe o documento clínico em PDF, imagem ou texto/JSON.
-2. **Classificação:** identifica a categoria, como receituário médico, laudo de exame laboratorial ou de imagem, guia de solicitação de procedimento, relatório de alta/internação ou atestado médico.
-3. **Extração de dados:** um modelo de linguagem extrai as informações essenciais, como identificação do paciente, dados do profissional e CRM, hipótese diagnóstica (CID-10), medicamentos, dosagens, urgência e exames solicitados.
-4. **Avaliação:** o agente verifica a consistência dos dados, procura possíveis conflitos e calcula um score de confiabilidade da extração.
-5. **Roteamento:** com base nisso, encaminha o documento ao destino correto: fila de urgência médica, auditoria de autorizações, farmácia hospitalar, prontuário eletrônico do paciente ou fila de revisão humana, quando há ambiguidade.
-6. **Armazenamento:** o resultado e o histórico de triagem ficam disponíveis em JSON estruturado, e os documentos são guardados no OCI Object Storage, organizados por status.
+1. **Ingestão:** guarda o original no bucket (`recebidos/`).
+2. **Classificação (Gemini):** tipo do documento, especialidade, prioridade (Rotina, Prioritário ou Urgente) e score de confiança.
+3. **Extração (Gemini):** paciente, médico e CRM, exame, diagnóstico, CID sugerido e medicamentos (nome, dosagem, posologia, legibilidade), validados com Pydantic.
+4. **Avaliação (regras em Python):** urgência, campos faltando, inconsistências e score final.
+5. **Roteamento:** urgente, revisão humana ou padrão.
+6. **Armazenamento:** grava o resultado em JSON na pasta correspondente.
 
+Se o Gemini falhar, o erro não derruba o sistema: o documento vai para a revisão humana. O conteúdo dos documentos é tratado como dado, nunca como instrução, para reduzir riscos de manipulação do modelo.
 
+## Regras de decisão
 
-## Funcionalidades do MVP
+**A IA sugere, a regra confirma.** A decisão final usa regras previsíveis e auditáveis, e não apenas a opinião do modelo.
 
-- **Recebimento de documentos** clínicos em texto, PDF ou imagem.
-- **Classificação automática** do tipo de documento com modelo de linguagem.
-- **Extração de dados clínicos** essenciais em JSON estruturado e validado.
-- **Grafo de decisão condicional** que roteia cada documento para o destino correto.
-- **Score de confiança** da extração e **detecção de urgências** médicas.
-- **Tratamento de casos ambíguos**: documentos com dados ilegíveis, faltantes ou inconsistentes, ou com baixa confiança, são sinalizados para revisão humana (Human-in-the-Loop).
-- **Armazenamento no OCI Object Storage** (camada Always Free), com os documentos organizados por status, por exemplo recebidos, processados e auditoria humana.
-- **Interface de triagem** para enviar documentos e visualizar o resultado do fluxo.
-- **Três cenários de demonstração**: fluxo padrão aprovado, caso de urgência médica e caso ambíguo direcionado para auditoria humana.
+- **Urgência:** prioridade "Urgente" sugerida pelo modelo **ou** termos críticos no diagnóstico (ex.: TEP, infarto, AVC, sepse), com tratamento de negações como "sem evidência de…".
+- **Revisão humana:** campo obrigatório ausente, medicamento ilegível, inconsistência (ex.: receita sem medicamento), tipo desconhecido, erro de processamento ou score abaixo do limiar.
+- **Score final:** parte do score da classificação e desconta cada problema encontrado.
 
-
-## Fluxo de decisão e regras de roteamento
-
-> 🔴 **ATENÇÃO: esta seção é uma proposta inicial e ainda será revisada com a equipe.**
-
-O fluxo é modelado como um grafo de decisão com etapas condicionais (LangGraph). Depois de classificar o documento, extrair os dados e avaliar a confiança, o agente escolhe o destino de acordo com as regras abaixo.
-
-### 🔴 Destino por tipo de documento (a revisar com a equipe)
-
-| Tipo de documento | Destino |
+| Situação | Destino |
 |---|---|
-| Receituário médico | Farmácia Hospitalar |
-| Guia de solicitação de procedimento | Auditoria de Autorizações |
-| Laudo de exame, relatório de alta/internação e atestado médico | Prontuário Eletrônico do Paciente |
+| Urgente | Fila de Urgência Médica + alerta ao plantão |
+| Urgente com dados duvidosos | Mesma fila de urgência, marcada para auditoria humana |
+| Dados duvidosos | Fila de Revisão Humana |
+| Receituário | Farmácia Hospitalar |
+| Guia de procedimento | Auditoria de Autorizações |
+| Laudos, relatório de alta e atestado | Prontuário Eletrônico |
 
-### 🔴 Casos especiais (a revisar com a equipe)
+Limiar de confiança, penalidades, campos obrigatórios, termos de urgência e destinos ficam em um arquivo de configuração e podem ser ajustados **sem mexer no código**.
 
-- **Urgência:** documentos com sinais de urgência, como solicitações urgentes ou prescrições de alto risco, vão para a Fila de Urgência Médica, com alerta para a equipe de plantão.
-- **Ambiguidade:** documentos com dados ilegíveis, faltantes, inconsistentes ou com baixa confiança vão para a Fila de Revisão Humana.
-- **Limite de confiança:** em definição, a ser ajustado durante os testes.
-- **Documento urgente e com baixa confiança ao mesmo tempo:** em definição.
-
-
-## Arquitetura e tecnologias
-
-> 🔴 **ATENÇÃO: as tecnologias abaixo ainda serão confirmadas com a equipe.**
+## Tecnologias
 
 | Camada | Tecnologia |
 |---|---|
-| Fluxo do agente (grafo de decisão) | LangGraph (Python) |
-| Modelo de linguagem (classificação e extração) | Cohere |
-| Interface de triagem | Streamlit |
-| Armazenamento | OCI Object Storage (camada Always Free) |
-| Validação dos dados extraídos | 🔴 Pydantic (sugerido pelo desafio, a confirmar) |
+| Linguagem e validação | Python, Pydantic |
+| Fluxo do agente | LangGraph |
+| IA multimodal | Google Gemini (lê PDF e imagem direto, sem OCR separado) |
+| Interface | Streamlit |
+| Armazenamento | OCI Object Storage (Always Free) |
+| Teste local do armazenamento | SeaweedFS no Docker (API S3) |
 
-### Como as peças se conectam
+## Armazenamento
 
-1. O usuário envia o documento pela interface em Streamlit.
-2. O grafo em LangGraph conduz o documento pelas etapas, chamando o modelo da Cohere para classificar e extrair os dados.
-3. O agente decide o destino do documento, de acordo com as regras de roteamento.
-4. O resultado em JSON e o documento são salvos no OCI Object Storage, organizados por status.
+Os arquivos ficam em um bucket organizado por status:
 
-🔴 **A verificar:** se o modelo da Cohere escolhido lê imagens e PDFs digitalizados, ou se será preciso extrair o texto antes de enviá-lo ao modelo.
+- `recebidos/`: documentos originais
+- `processados/`: resultados em JSON (com subpasta `urgentes/` e uma por destino)
+- `auditoria_humana/`: casos aguardando revisão
 
+Cada registro guarda a resposta da triagem e metadados (data, canal de origem e avaliação com os motivos). O código aceita três destinos: **OCI** (nuvem, só recursos Always Free), **SeaweedFS** em Docker e uma pasta local, usados para desenvolver e testar antes da nuvem.
 
+## Interface
 
-## Armazenamento no OCI
+Painel em **Streamlit**. A aba de nova triagem (envio de arquivo ou texto, resultado, justificativa e alerta) está ativa. As abas de auditoria humana, regras de triagem e histórico do bucket estão em desenvolvimento.
 
-Os documentos e os resultados da triagem são guardados no **OCI Object Storage**, usando **exclusivamente recursos da camada Always Free** da Oracle.
+## Status
 
-Os arquivos ficam em buckets organizados por status, o que separa o que acabou de chegar, o que já foi processado e o que depende de revisão humana. Por exemplo:
-
-- `recebidos/`: documentos recém-enviados
-- `processados/`: documentos já triados e o resultado em JSON, com os casos urgentes separados (por exemplo, `processados/urgentes/`)
-- `auditoria_humana/`: documentos que aguardam revisão de um auditor
-
-Para cada documento, o histórico de triagem fica registrado em JSON estruturado, com a classificação, os dados extraídos e a decisão de roteamento.
-
+- ✅ **Implementado:** classificação, extração, avaliação, roteamento em LangGraph, armazenamento local/SeaweedFS e tela de triagem.
+- 🔄 **Em andamento:** integração com o OCI real, painel de auditoria humana, tela de regras e histórico.
+- 📌 **Planejado, se houver tempo:** lista de medicamentos de alto risco, alertas em tempo real (Slack/e-mail), deploy no OCI Compute.
 
 ## Cenários de demonstração
 
-A demonstração do projeto cobrirá três casos de teste:
+1. **Rotina:** receita legível e completa, encaminhada à Farmácia sem intervenção humana.
+2. **Urgência:** laudo de tomografia compatível com tromboembolismo pulmonar agudo, enviado à Fila de Urgência com alerta.
+3. **Ambíguo:** documento ilegível ou incompleto, direcionado à revisão humana.
 
-1. **Fluxo padrão aprovado:** um documento legível e completo, com alta confiança na extração. O agente classifica, extrai os dados e o encaminha automaticamente ao destino correto, sem intervenção humana.
-2. **Urgência médica:** um documento com achado crítico, como um laudo de tomografia de tórax compatível com tromboembolismo pulmonar agudo (exemplo do desafio). O agente identifica a urgência, encaminha para a Fila de Urgência Médica e gera um alerta para o plantão.
-3. **Caso ambíguo:** um documento com dados ilegíveis, faltantes ou inconsistentes. O agente sinaliza a baixa confiança e o direciona para a Fila de Revisão Humana (auditoria humana).
+## Cuidados e limitações
 
-🔴 **Documentos de teste:** em definição.
+- Usamos **apenas documentos fictícios**, sem dados reais de pacientes (LGPD).
+- O CID-10 é uma **sugestão**, não um diagnóstico.
+- A urgência é detectada a partir do diagnóstico extraído; termos fora de contexto podem gerar alertas desnecessários, o que é preferível a deixar de alertar.
 
+## Demonstração
 
-## Equipe
+▶️ [Assista à demonstração no YouTube](https://www.youtube.com/watch?v=H7V5tj8-2xs)
 
-> 🔴 **ATENÇÃO: funções e integrantes ainda serão confirmados com a equipe.**
+🖥️ Tela do MediFlow
+![Tela do MediFlow](https://media.discordapp.net/attachments/1559374106967801937/1564028207269814464/image.png?ex=6ae117c6&is=6adfc646&hm=ada92070a5c1d4f4918bfd30a18ccbcc164dc5831986764078f0f20c64bb4372&=&format=webp&quality=lossless)
 
-| Integrante | Função |
-|---|---|
-| Samuel Piovani | A definir |
-| Leonardo Lacerda | A definir |
-| Marcel Fagundes Souza | A definir |
+- O MediFlow apoia a triagem e **não substitui** profissionais de saúde.
 
-🔴 A equipe tem 5 integrantes, e os demais nomes ainda serão incluídos.
+## Equipe e links
 
-## Links
+**Equipe 24:** Samuel Piovani, Leonardo Lacerda e Marcel Fagundes Souza.
 
-- **Repositório no GitHub:** https://github.com/No-Country-simulation/G10---BRASIL---EQUIPO-24
-
-
-
-
-
+**Repositório:** https://github.com/No-Country-simulation/G10---BRASIL---EQUIPO-24
