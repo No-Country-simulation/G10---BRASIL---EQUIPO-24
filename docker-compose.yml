@@ -15,11 +15,13 @@ volumes:
   seaweed_data:
     driver: local
 
+# Iniciar o Docker
+# docker start seaweedfs
 # Subir o SeaweedFS com Docker:
 # docker run -d --name seaweedfs -p 9333:9333 -p 8888:8888 -p 8333:8333 \
 #      -v seaweed_data:/data chrislusf/seaweedfs server -dir=/data -s3
 
-# Para testar
+# Para testar o banco de dados
 # python storage.py --testar, que deve gravar, ler e apagar um objeto de teste.
 #
 # Consultar
