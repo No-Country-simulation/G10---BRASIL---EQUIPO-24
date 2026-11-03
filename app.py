@@ -1,8 +1,9 @@
 """
 app.py: ETAPA 8 do MediFlow (painel Streamlit: triagem + auditoria humana + regras)
+Novo layout perfumado
 
 COMO RODAR:
-    streamlit run app.py
+    streamlit run app2.py
 
 O Streamlit transforma um script Python em página web. A cada clique, o script
 roda de novo de cima para baixo; por isso guardamos coisas em `st.session_state`.
@@ -46,6 +47,85 @@ def obter_armazenamento():
 
 
 armazenamento = obter_armazenamento()
+
+
+def mostrar_diagnostico(erros_brutos: list[str]) -> None:
+    """Mostra cada erro técnico como um aviso claro: o que houve, o que fazer, e o texto cru num expansor."""
+    for bruto in erros_brutos:
+        d = diagnosticar(bruto)
+        corpo = f"**{d.titulo}**\n\n{d.explicacao}\n\n➡️ **O que fazer:** {d.acao}"
+        (st.warning if d.temporario else st.error)(corpo, icon="⏳" if d.temporario else "🛑")
+        with st.expander("Detalhes técnicos"):
+            st.code(bruto, language=None)
+
+
+def json_bonito(objeto) -> str:
+    """JSON indentado (2 espaços), com acentos legíveis e na MESMA ordem de campos da resposta da API."""
+    return json.dumps(objeto, ensure_ascii=False, indent=2)
+
+
+def mostrar_json(objeto, nome_arquivo: str, chave: str) -> None:
+    """Bloco de código JSON formatado (com botão de copiar) + botão para baixar o arquivo."""
+    texto = json_bonito(objeto)
+    st.code(texto, language="json", line_numbers=False)
+    st.download_button("⬇️ Baixar JSON", texto, file_name=nome_arquivo, mime="application/json", key=chave)
+
+
+def _v(valor) -> str:
+    return "—" if valor in (None, "") else str(valor)
+
+
+def mostrar_resumo(r: dict) -> None:
+    """Os mesmos dados do JSON, organizados em seções legíveis."""
+    c, dx, d, arm = r["classificacao"], r["dados_extraidos"], r["decisao_roteamento"], r.get("armazenamento_oci")
+    st.caption(f"Documento **{r['documento_id']}** · status **{r['status']}**")
+
+    st.markdown("##### Classificação")
+    cor = {"Urgente": "🔴", "Prioritário": "🟡", "Rotina": "🟢"}.get(c["nivel_prioridade"], "⚪")
+    ca, cb = st.columns(2)
+    ca.markdown(f"**Tipo:** {c['tipo_documento']}  \n**Especialidade:** {_v(c['especialidade'])}")
+    cb.markdown(f"**Prioridade:** {cor} {c['nivel_prioridade']}  \n**Score de confiança:** {c['score_confianca_classificacao']:.2f}")
+
+    st.markdown("##### Dados extraídos")
+    col1, col2 = st.columns(2)
+    col1.markdown(f"**Paciente**  \nNome: {_v(dx['paciente']['nome'])}  \nIdade: {_v(dx['paciente']['idade'])}")
+    col2.markdown(f"**Médico solicitante**  \nNome: {_v(dx['medico_solicitante']['nome'])}  \nCRM: {_v(dx['medico_solicitante']['crm'])}")
+    st.markdown(
+        f"**Exame realizado:** {_v(dx.get('exame_realizado'))}  \n"
+        f"**Diagnóstico principal:** {_v(dx.get('diagnostico_principal'))}  \n"
+        f"**CID sugerido:** {_v(dx.get('cid_sugerido'))}"
+    )
+    if dx.get("medicamentos"):
+        st.dataframe(
+            [{"Medicamento": m["nome"], "Dosagem": _v(m["dosagem"]), "Posologia": _v(m["posologia"]),
+              "Legível": "✅" if m["legivel"] else "⚠️ não"} for m in dx["medicamentos"]],
+            hide_index=True, width="stretch",
+        )
+
+    st.markdown("##### Decisão de roteamento")
+    st.markdown(
+        f"**Destino:** {ICONES.get(d['destino_principal'], '📄')} `{d['destino_principal']}`  \n"
+        f"**Requer auditoria humana:** {'Sim' if d['requer_auditoria_humana'] else 'Não'}  \n"
+        f"**Justificativa:** {d['justificativa_roteamento']}"
+    )
+    if d.get("notificacao_gerada"):
+        n = d["notificacao_gerada"]
+        st.markdown(f"**Notificação** (`{n['canal']}`):")
+        st.error(n["mensagem"])
+
+    if arm:
+        st.markdown("##### Armazenamento")
+        st.markdown(f"**Bucket:** `{arm['bucket']}`  \n**Status do backup:** {arm['status_backup']}")
+        st.code(arm["caminho_objeto"], language=None)
+
+
+def erros_do_registro(resposta: dict) -> list[str]:
+    """Lê do registro salvo os textos técnicos dos erros (a resposta da API só traz a versão resumida)."""
+    try:
+        caminho = resposta["armazenamento_oci"]["caminho_objeto"]
+        return armazenamento.ler_json(caminho)["metadados"]["avaliacao"].get("erros", [])
+    except Exception:
+        return []
 
 st.title("🏥 MediFlow")
 st.caption(
@@ -112,14 +192,22 @@ with aba_triagem:
                 st.error(d["notificacao_gerada"]["mensagem"])
             st.write("**Justificativa:**", d["justificativa_roteamento"])
             if r["status"] == "erro":
-                st.warning("O processamento teve erros: o documento foi enviado à revisão humana.")
-            st.json(r, expanded=False)
+                st.info("O processamento teve erro: o documento foi enviado à revisão humana, sem perda de dados.")
+                mostrar_diagnostico(erros_do_registro(r) or [d["justificativa_roteamento"]])
+            aba_resumo, aba_json = st.tabs(["📋 Resumo organizado", "{ } JSON"])
+            with aba_json:
+                mostrar_json(r, f"{r['documento_id']}.json", "dl_resultado")
+            with aba_resumo:
+                mostrar_resumo(r)
 
 # ===========================================================================
 # ABA 2: AUDITORIA HUMANA
 # ===========================================================================
 with aba_auditoria:
     pendentes = auditoria.listar_pendentes(armazenamento)
+    if "flash" in st.session_state:  # mensagem que precisa sobreviver ao st.rerun()
+        tipo, texto = st.session_state.pop("flash")
+        getattr(st, tipo)(texto)
     st.subheader(f"Aguardando revisão: {len(pendentes)}")
     if not pendentes:
         st.info("Nenhum documento pendente. 🎉")
@@ -131,10 +219,32 @@ with aba_auditoria:
 
         col1, col2 = st.columns(2)
         with col1:
+            erros_brutos = meta["avaliacao"].get("erros") or []
+            if erros_brutos:
+                mostrar_diagnostico(erros_brutos)
+                if st.button("🔄 Reprocessar documento", key=f"rep_{escolhido}", type="primary"):
+                    try:
+                        with st.spinner("Reprocessando…"):
+                            nova = auditoria.reprocessar(armazenamento, escolhido, criar_cliente(), carregar_config())
+                        if nova.status == "erro":
+                            st.session_state["flash"] = ("warning", "Ainda não foi possível processar. O documento continua na fila de revisão.")
+                        else:
+                            destino = nova.decisao_roteamento.destino_principal.value
+                            st.session_state["flash"] = ("success", f"Reprocessado com sucesso → {destino}")
+                        st.rerun()
+                    except (ErroExtracao, auditoria.ErroAuditoria) as e:
+                        st.error(f"Não foi possível reprocessar: {e}")
             st.markdown("#### Por que foi para revisão?")
             for motivo in meta["avaliacao"]["motivos_revisao"] or ["(sem motivos registrados)"]:
                 st.warning(motivo)
-            st.metric("Score final de confiança", meta["avaliacao"]["score_final"])
+            av = meta["avaliacao"]
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Score final", av["score_final"])
+            m2.metric("Classif. (LLM)", av["score_classificacao"])
+            m3.metric("Leitura (LLM)", av.get("score_extracao") if av.get("score_extracao") is not None else "n/d")
+            m4.metric("Completude", av.get("score_completude", "n/d"))
+            if av.get("campos_incertos"):
+                st.info("Campos que o modelo leu com dúvida: " + ", ".join(av["campos_incertos"]))
             st.write("**Classificação:**", resposta["classificacao"]["tipo_documento"])
 
             original = auditoria.carregar_original(armazenamento, escolhido)
@@ -223,4 +333,4 @@ with aba_historico:
     st.dataframe({"objeto": objetos}, width="stretch")
     abrir = st.selectbox("Ver conteúdo de um .json", [""] + [o for o in objetos if o.endswith(".json")])
     if abrir:
-        st.json(armazenamento.ler_json(abrir))
+        mostrar_json(armazenamento.ler_json(abrir), abrir.split("/")[-1], "dl_historico")
