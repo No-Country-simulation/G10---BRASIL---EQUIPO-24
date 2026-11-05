@@ -20,6 +20,8 @@ from storage import ArmazenamentoBase, ErroArmazenamento
 
 PASTA_PENDENTES = "auditoria_humana"
 
+_MIME_POR_EXTENSAO = {"pdf": "application/pdf", "png": "image/png", "jpg": "image/jpeg", "webp": "image/webp"}
+
 
 class ErroAuditoria(Exception):
     pass
@@ -43,6 +45,39 @@ def carregar_original(armazenamento: ArmazenamentoBase, documento_id: str) -> Op
     for nome in armazenamento.listar(f"recebidos/{documento_id}."):
         return nome, armazenamento.ler(nome)
     return None
+
+
+def reprocessar(armazenamento: ArmazenamentoBase, documento_id: str, client, config: Optional[dict] = None):
+    """Roda a triagem de novo a partir do ORIGINAL guardado em recebidos/.
+
+    Útil quando o motivo da revisão foi um erro passageiro (ex.: Gemini sobrecarregado).
+    Se o novo resultado for gravado em outra pasta, o registro pendente é removido.
+    """
+    from graph import triar_documento  # import aqui: evita carregar o grafo à toa
+
+    pendente = carregar_pendente(armazenamento, documento_id)
+    original = carregar_original(armazenamento, documento_id)
+    if original is None:
+        raise ErroAuditoria(f"O arquivo original de {documento_id!r} não foi encontrado em recebidos/.")
+
+    nome, dados = original
+    extensao = nome.rsplit(".", 1)[-1].lower()
+    conteudo = dados.decode("utf-8") if extensao == "txt" else dados
+    resposta = triar_documento(
+        documento_id,
+        conteudo,
+        mime_type=_MIME_POR_EXTENSAO.get(extensao),
+        canal_origem=pendente.get("metadados", {}).get("canal_origem"),
+        client=client,
+        armazenamento=armazenamento,
+        config=config,
+    )
+
+    novo = resposta.armazenamento_oci.caminho_objeto
+    gravou = resposta.armazenamento_oci.status_backup != "falha"
+    if gravou and novo != f"{PASTA_PENDENTES}/{documento_id}.json":
+        armazenamento.apagar(f"{PASTA_PENDENTES}/{documento_id}.json")  # saiu da fila do auditor
+    return resposta
 
 
 def registrar_decisao(
