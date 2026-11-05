@@ -1,0 +1,23 @@
+==================================================
+AMBIENTE DE TESTE - DADOS FICTÍCIOS PARA VALIDAÇÃO
+==================================================
+Emitente: Dr. Carlos Eduardo de Souza (Fictício)
+Registro Profissional: CRM-SP 000000-TESTE
+
+Paciente: João dos Santos Exemplo
+Data de Emissão: 27/10/2026
+
+Prescrição:
+1. Medicamento Genérico Teste A (500mg) ------------ 1 comprimido
+   Via de administração: Oral
+   Frequência: A cada 8 horas
+   Duração: 5 dias
+
+2. Medicamento Genérico Teste B (20mg) ------------- 1 cápsula
+   Via de administração: Oral
+   Frequência: Em jejum, pela manhã
+   Duração: 30 dias
+
+Observações: Uso contínuo para fins de validação de sistema.
+==================================================
+
