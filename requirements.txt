@@ -4,7 +4,6 @@ langgraph
 python-dotenv
 
 streamlit
-oci
 python-dotenv
 
 #API e Web
@@ -18,3 +17,6 @@ pydantic
 
 #Banco de dados SDK da SeaweedFS local (Object Storage)
 boto3
+
+#SDK da Oracle Cloud (Object Storage)
+oci

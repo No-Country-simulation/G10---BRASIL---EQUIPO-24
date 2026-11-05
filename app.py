@@ -48,7 +48,6 @@ def obter_armazenamento():
 
 armazenamento = obter_armazenamento()
 
-
 def mostrar_diagnostico(erros_brutos: list[str]) -> None:
     """Mostra cada erro técnico como um aviso claro: o que houve, o que fazer, e o texto cru num expansor."""
     for bruto in erros_brutos:
