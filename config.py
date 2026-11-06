@@ -16,6 +16,12 @@ from pathlib import Path
 
 from schemas import DestinoRoteamento, TipoDocumento
 
+# Campos que podem ser exigidos nas regras (caminho "objeto.campo").
+CAMPOS_VALIDOS = {
+    "paciente.nome", "paciente.idade", "medico_solicitante.nome", "medico_solicitante.crm",
+    "exame_realizado", "diagnostico_principal", "cid_sugerido", "medicamentos",
+}
+
 ARQUIVO_CONFIG = Path(os.getenv("CONFIG_TRIAGEM", "config_triagem.json"))
 
 CONFIG_PADRAO: dict = {
@@ -24,8 +30,27 @@ CONFIG_PADRAO: dict = {
     # Quanto o score cai por problema encontrado na extração.
     "penalidade_campo_faltante": 0.20,
     "penalidade_medicamento_ilegivel": 0.15,
-    # Campos que, se faltarem, obrigam revisão humana (caminho "objeto.campo").
+    "penalidade_medicamento_incompleto": 0.10,  # legível, mas sem dosagem ou posologia
+    "penalidade_campo_incerto": 0.05,  # campo que o Gemini disse ter lido com dúvida
+    # Campos que, se faltarem, obrigam revisão humana em QUALQUER documento.
     "campos_obrigatorios": ["paciente.nome", "medico_solicitante.crm"],
+    # Campos que compõem a NOTA DE COMPLETUDE (calculada pelo código, sem opinião do LLM).
+    # "a|b" significa "basta um dos dois". Para receitas, os medicamentos entram à parte.
+    "campos_completude": [
+        "paciente.nome",
+        "paciente.idade",
+        "medico_solicitante.nome",
+        "medico_solicitante.crm",
+        "diagnostico_principal|exame_realizado",
+    ],
+    # Campos extras exigidos conforme o TIPO do documento.
+    "campos_obrigatorios_por_tipo": {
+        TipoDocumento.RECEITUARIO.value: ["medicamentos"],
+        TipoDocumento.LAUDO_IMAGEM.value: ["exame_realizado", "diagnostico_principal"],
+        TipoDocumento.LAUDO_LABORATORIAL.value: ["exame_realizado"],
+        TipoDocumento.GUIA_PROCEDIMENTO.value: ["exame_realizado"],
+        TipoDocumento.RELATORIO_ALTA.value: ["diagnostico_principal"],
+    },
     # Termos que indicam achado crítico (comparados sem acento e sem maiúsculas).
     "palavras_urgencia": [
         "tep",
@@ -88,6 +113,16 @@ def validar_config(config: dict) -> list[str]:
             erros.append(f"Tipo de documento desconhecido: {tipo!r}")
         if destino not in destinos_validos:
             erros.append(f"Destino desconhecido para {tipo!r}: {destino!r}")
+    exigidos = list(config.get("campos_obrigatorios", []))
+    for spec in config.get("campos_completude", []):
+        exigidos += spec.split("|")
+    for tipo, campos in config.get("campos_obrigatorios_por_tipo", {}).items():
+        if tipo not in tipos_validos:
+            erros.append(f"Tipo de documento desconhecido em campos_obrigatorios_por_tipo: {tipo!r}")
+        exigidos += list(campos)
+    for campo in exigidos:
+        if campo not in CAMPOS_VALIDOS:
+            erros.append(f"Campo obrigatório desconhecido: {campo!r}")
     if not isinstance(config.get("palavras_urgencia"), list):
         erros.append("palavras_urgencia deve ser uma lista.")
     return erros

@@ -29,7 +29,6 @@ from typing import Optional, TypedDict, Union
 from langgraph.graph import END, START, StateGraph
 
 import rules
-
 from classifier import classificar_documento
 from config import carregar_config
 from extractor import ErroExtracao, extrair_dados
@@ -76,7 +75,7 @@ def construir_grafo(client=None, armazenamento: Optional[ArmazenamentoBase] = No
     armazenamento = armazenamento or criar_armazenamento()
     config = config or carregar_config()
 
-   #  ------------------------------ NÓS ------------------------------
+    # ------------------------------ NÓS ------------------------------
     def ingestao(estado: EstadoTriagem) -> dict:
         """Guarda o documento ORIGINAL em recebidos/ (se falhar, seguimos mesmo assim)."""
         conteudo = estado["conteudo"]
@@ -111,6 +110,10 @@ def construir_grafo(client=None, armazenamento: Optional[ArmazenamentoBase] = No
         )
         dados = estado.get("dados") or DadosExtraidos()
         avaliacao = rules.avaliar(classificacao, dados, config, estado.get("erros"))
+        # O número exibido na resposta é o score FINAL (tipo + leitura + completude do
+        # conteúdo), e não só a opinião do LLM sobre o tipo. O valor original do LLM
+        # continua guardado em metadados.avaliacao.score_classificacao.
+        classificacao = classificacao.model_copy(update={"score_confianca_classificacao": avaliacao.score_final})
         return {"classificacao": classificacao, "dados": dados, "avaliacao": avaliacao}
 
     def rota_urgente(estado: EstadoTriagem) -> dict:
@@ -142,7 +145,7 @@ def construir_grafo(client=None, armazenamento: Optional[ArmazenamentoBase] = No
                 bucket=armazenamento.bucket, caminho_objeto=caminho, status_backup=armazenamento.status_ok
             ),
         )
-       # O registro guardado tem a resposta + metadados que ajudam o auditor.
+        # O registro guardado tem a resposta + metadados que ajudam o auditor.
         registro = {
             "resposta": resposta.model_dump(mode="json"),
             "metadados": {
@@ -158,7 +161,7 @@ def construir_grafo(client=None, armazenamento: Optional[ArmazenamentoBase] = No
             resposta.armazenamento_oci.status_backup = "falha"
         return {"resposta": resposta}
 
-    #------------------- ARESTAS CONDICIONAIS (os "ifs") -------------------
+    # ------------------- ARESTAS CONDICIONAIS (os "ifs") -------------------
     def apos_classificar(estado: EstadoTriagem) -> str:
         # Se a classificação falhou, não adianta extrair: vamos direto para a avaliação.
         return "extrair" if estado.get("classificacao") else "avaliar"
@@ -166,7 +169,7 @@ def construir_grafo(client=None, armazenamento: Optional[ArmazenamentoBase] = No
     def apos_avaliar(estado: EstadoTriagem) -> str:
         return rules.escolher_rota(estado["avaliacao"])  # "urgente" | "revisao" | "padrao"
 
-    #------------------------------ MONTAGEM ------------------------------
+    # ------------------------------ MONTAGEM ------------------------------
     g = StateGraph(EstadoTriagem)
     for nome, funcao in [
         ("ingestao", ingestao),

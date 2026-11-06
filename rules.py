@@ -12,6 +12,19 @@ O QUE ESTE MÓDULO FAZ, EM 3 PASSOS:
                          "urgente" | "revisao" | "padrao"
   3) decisao_*()      -> monta a `DecisaoRoteamento` (destino, justificativa, alerta)
 
+COMO O SCORE FINAL É CALCULADO (examina o documento inteiro):
+  base  = o MENOR entre três notas:
+            - classificação: certeza do LLM sobre o documento (tipo + legibilidade)
+            - extração     : certeza do LLM sobre a leitura dos dados
+            - completude   : calculada AQUI, pelo código, contando quantos campos
+                             importantes vieram preenchidos e legíveis. Não depende
+                             da opinião do LLM, então um LLM "otimista demais" não
+                             consegue esconder um documento vazio ou ilegível.
+          (a cadeia é tão confiável quanto o seu elo mais fraco)
+  final = base - penalidades por cada problema encontrado no CONTEÚDO:
+            campo obrigatório ausente, medicamento ilegível, medicamento sem
+            dosagem/posologia e campos que o Gemini disse ter lido com dúvida.
+
 ORDEM DE PRIORIDADE (do mais importante ao menos):
   1º URGENTE  -> sempre vai para a Fila de Emergência. Urgência nunca espera revisão.
                  (Se, além de urgente, os dados são duvidosos, o alerta sai igual E
@@ -26,7 +39,8 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from config import carregar_config
+from config import CAMPOS_VALIDOS, carregar_config
+from diagnostico import resumir
 from schemas import (
     Classificacao,
     DadosExtraidos,
@@ -62,6 +76,8 @@ def _obter(dados: DadosExtraidos, caminho: str):
 
 
 def _vazio(valor) -> bool:
+    if isinstance(valor, (list, tuple, dict)):
+        return len(valor) == 0
     return valor is None or (isinstance(valor, str) and not valor.strip())
 
 
@@ -77,6 +93,10 @@ class Avaliacao(BaseModel):
     inconsistencias: list[str] = []
     erros: list[str] = []
     score_classificacao: float
+    score_extracao: Optional[float] = None
+    score_completude: float = 1.0
+    campos_incertos: list[str] = []
+    medicamentos_incompletos: list[str] = []
     score_final: float
     confianca_baixa: bool
     motivos_revisao: list[str] = []
@@ -100,15 +120,54 @@ def detectar_termos_urgencia(texto: Optional[str], palavras: list[str]) -> list[
 
 
 def verificar_inconsistencias(classificacao: Classificacao, dados: DadosExtraidos) -> list[str]:
-    """Contradições simples entre o que foi classificado e o que foi extraído."""
+    """Contradições entre campos extraídos."""
     problemas = []
-    tipo = classificacao.tipo_documento
-    if tipo == TipoDocumento.RECEITUARIO and not dados.medicamentos:
-        problemas.append("Documento classificado como receituário, mas nenhum medicamento foi extraído.")
-    if tipo in (TipoDocumento.LAUDO_IMAGEM, TipoDocumento.LAUDO_LABORATORIAL):
-        if _vazio(dados.exame_realizado) and _vazio(dados.diagnostico_principal):
-            problemas.append("Laudo sem exame realizado e sem diagnóstico identificáveis.")
+    if not _vazio(dados.cid_sugerido) and _vazio(dados.diagnostico_principal):
+        problemas.append("CID sugerido sem diagnóstico principal correspondente.")
     return problemas
+
+
+def _preenchido(dados: DadosExtraidos, spec: str) -> bool:
+    """spec pode ser 'paciente.nome' ou uma alternativa 'diagnostico_principal|exame_realizado'."""
+    return any(not _vazio(_obter(dados, caminho)) for caminho in spec.split("|"))
+
+
+def _medicamento_ok(m) -> float:
+    """0 a 1: nome legível + dosagem + posologia (1/3 cada)."""
+    nome_ok = m.legivel and normalizar(m.nome).strip() not in ("", "ilegivel")
+    return (nome_ok + (not _vazio(m.dosagem)) + (not _vazio(m.posologia))) / 3
+
+
+def calcular_completude(classificacao: Classificacao, dados: DadosExtraidos, config: dict) -> float:
+    """Nota 0-1 do quanto o CONTEÚDO do documento veio preenchido e legível.
+
+    É uma média de componentes, cada um valendo de 0 a 1:
+      - um componente por campo de `campos_completude` (1 se preenchido, 0 se não);
+      - se o documento é receita (ou trouxe medicamentos): um componente com a
+        média da qualidade dos medicamentos; sem nenhum medicamento, vale 0.
+    Receita ilegível => quase tudo 0 => nota baixa, não importa o que o LLM ache.
+    """
+    componentes = [1.0 if _preenchido(dados, spec) else 0.0 for spec in config.get("campos_completude", [])]
+    if classificacao.tipo_documento == TipoDocumento.RECEITUARIO or dados.medicamentos:
+        meds = dados.medicamentos
+        componentes.append(sum(_medicamento_ok(m) for m in meds) / len(meds) if meds else 0.0)
+    return round(sum(componentes) / len(componentes), 2) if componentes else 1.0
+
+
+def _campos_exigidos(classificacao: Classificacao, config: dict) -> list[str]:
+    """Campos obrigatórios gerais + os exigidos pelo TIPO do documento (sem repetir)."""
+    por_tipo = config.get("campos_obrigatorios_por_tipo", {}).get(classificacao.tipo_documento.value, [])
+    return list(dict.fromkeys(list(config["campos_obrigatorios"]) + list(por_tipo)))
+
+
+def _campo_critico_incerto(incertos: list[str], exigidos: list[str]) -> list[str]:
+    """Campos incertos que são obrigatórios ou fazem parte dos medicamentos."""
+    criticos = []
+    for caminho in incertos:
+        base = caminho.split("[")[0]  # "medicamentos[1].dosagem" -> "medicamentos"
+        if base in exigidos or caminho in exigidos or base == "medicamentos":
+            criticos.append(caminho)
+    return criticos
 
 
 def avaliar(
@@ -125,33 +184,72 @@ def avaliar(
     termos = detectar_termos_urgencia(dados.diagnostico_principal, config["palavras_urgencia"])
     urgente = classificacao.nivel_prioridade == NivelPrioridade.URGENTE or bool(termos)
 
-    # --- campos obrigatórios ausentes ---
-    faltantes = [c for c in config["campos_obrigatorios"] if _vazio(_obter(dados, c))]
+    # --- campos obrigatórios (gerais + do tipo de documento) ausentes ---
+    exigidos = _campos_exigidos(classificacao, config)
+    faltantes = [c for c in exigidos if _vazio(_obter(dados, c))]
 
     # --- inconsistências ---
     inconsistencias = verificar_inconsistencias(classificacao, dados)
 
-    # --- score final: parte do score do LLM e desconta cada problema ---
+    # --- medicamentos: ilegíveis, e legíveis porém sem dosagem/posologia ---
     ilegiveis = [m for m in dados.medicamentos if not m.legivel]
-    score = classificacao.score_confianca_classificacao
+    incompletos = [m.nome for m in dados.medicamentos if m.legivel and (_vazio(m.dosagem) or _vazio(m.posologia))]
+
+    # --- campos que o próprio Gemini disse ter lido com dúvida ---
+    incertos = list(dict.fromkeys(dados.campos_incertos))
+    incertos_criticos = _campo_critico_incerto(incertos, exigidos)
+
+    # --- score final: elo mais fraco entre classificação e extração, menos penalidades ---
+    score_extracao = dados.score_confianca_extracao
+    completude = calcular_completude(classificacao, dados, config)
+    base = min(classificacao.score_confianca_classificacao, completude)
+    if score_extracao is not None:
+        base = min(base, score_extracao)
+    score = base
     score -= config["penalidade_campo_faltante"] * len(faltantes)
     score -= config["penalidade_medicamento_ilegivel"] * len(ilegiveis)
+    score -= config["penalidade_medicamento_incompleto"] * len(incompletos)
+    score -= config["penalidade_campo_incerto"] * len(incertos)
     score = round(max(0.0, min(1.0, score)), 2)
     confianca_baixa = score < config["limiar_confianca"]
 
     # --- motivos pelos quais um humano precisa olhar ---
     motivos = []
     if erros:
-        motivos += [f"Erro de processamento: {e}" for e in erros]
+        motivos += [f"Erro de processamento: {resumir(e)}" for e in erros]  # o texto técnico fica em Avaliacao.erros
     if confianca_baixa:
-        motivos.append(f"Score de confiança {score:.2f} abaixo do limiar {config['limiar_confianca']:.2f}.")
+        detalhe = f"classificação {classificacao.score_confianca_classificacao:.2f}"
+        if score_extracao is not None:
+            detalhe += f", extração {score_extracao:.2f}"
+        detalhe += f", completude {completude:.2f}"
+        motivos.append(
+            f"Score de confiança {score:.2f} abaixo do limiar {config['limiar_confianca']:.2f} ({detalhe})."
+        )
     if faltantes:
         motivos.append("Campos obrigatórios ausentes: " + ", ".join(faltantes) + ".")
     if ilegiveis:
         motivos.append(f"{len(ilegiveis)} medicamento(s) com leitura incerta/ilegível.")
+    if incompletos:
+        motivos.append("Medicamento(s) sem dosagem ou posologia: " + ", ".join(incompletos) + ".")
+    if incertos_criticos:
+        motivos.append("Campos críticos lidos com incerteza: " + ", ".join(incertos_criticos) + ".")
     if classificacao.tipo_documento == TipoDocumento.DESCONHECIDO:
         motivos.append("Tipo de documento não identificado.")
     motivos += inconsistencias
+
+    # Falha TOTAL (o Gemini não respondeu, então não há classificação nem dados): os demais
+    # avisos (score 0, campos ausentes, tipo desconhecido) são só consequência do erro e
+    # atrapalham o auditor. Mostramos apenas o erro real.
+    falha_total = (
+        bool(erros)
+        and classificacao.score_confianca_classificacao == 0.0
+        and classificacao.tipo_documento == TipoDocumento.DESCONHECIDO
+        and dados.score_confianca_extracao is None
+        and not dados.medicamentos
+        and all(_vazio(_obter(dados, c)) for c in CAMPOS_VALIDOS)
+    )
+    if falha_total:
+        motivos = [m for m in motivos if m.startswith("Erro de processamento")]
 
     return Avaliacao(
         urgente=urgente,
@@ -160,6 +258,10 @@ def avaliar(
         inconsistencias=inconsistencias,
         erros=erros,
         score_classificacao=classificacao.score_confianca_classificacao,
+        score_extracao=score_extracao,
+        score_completude=completude,
+        campos_incertos=incertos,
+        medicamentos_incompletos=incompletos,
         score_final=score,
         confianca_baixa=confianca_baixa,
         motivos_revisao=motivos,
