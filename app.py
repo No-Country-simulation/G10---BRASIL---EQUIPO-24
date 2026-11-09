@@ -15,11 +15,11 @@ ABAS:
   4. Histórico         : o que já foi gravado no bucket.
 """
 
-
-import streamlit as st
 import json
 import os
 from datetime import datetime
+
+import streamlit as st
 
 import auditoria
 from config import CONFIG_PADRAO, carregar_config, salvar_config
@@ -204,7 +204,7 @@ with aba_triagem:
             if r["status"] == "erro":
                 st.info("O processamento teve erro: o documento foi enviado à revisão humana, sem perda de dados.")
                 mostrar_diagnostico(erros_do_registro(r) or [d["justificativa_roteamento"]])
-            aba_resumo, aba_json = st.tabs(["📋 Resumo organizado", "{ } JSON"])
+            aba_json, aba_resumo = st.tabs(["{ } JSON", "📋 Resumo organizado"])
             with aba_json:
                 mostrar_json(r, f"{r['documento_id']}.json", "dl_resultado")
             with aba_resumo:
@@ -350,7 +350,19 @@ with aba_historico:
 # ABA 5: documentação da API (gerada do próprio FastAPI, sem precisar do uvicorn)
 # ===========================================================================
 with aba_api:
-    from main import app as api_app  # import aqui: só carrega o FastAPI quando a aba existe
+    # Import aqui, protegido: se faltar um módulo (ex.: fastapi no requirements.txt), só esta aba
+    # mostra o aviso e o resto do painel continua funcionando.
+    try:
+        from fastapi.testclient import TestClient
+
+        from main import app as api_app
+    except ModuleNotFoundError as e:
+        st.error(
+            f"A aba de API não pôde ser carregada: falta o módulo **`{e.name}`**. "
+            "Se for `fastapi`, `httpx` ou `multipart`, adicione `fastapi`, `httpx` e `python-multipart` ao "
+            "`requirements.txt`. Se for `main`, confirme que o arquivo `main.py` está na raiz do repositório."
+        )
+        st.stop()  # esta é a última aba do arquivo: o resto do painel já foi desenhado
 
     spec = api_app.openapi()
     st.subheader(f"{spec['info']['title']} · API v{spec['info']['version']}")
@@ -383,8 +395,6 @@ with aba_api:
     # -----------------------------------------------------------------------
     st.divider()
     st.subheader("🧪 Testar endpoints (equivalente ao 'Try it out' do Swagger)")
-    from fastapi.testclient import TestClient
-
     EXEMPLOS = {
         "/triagem": {
             "documento_id": "DOC-CLIN-2026-9001",
