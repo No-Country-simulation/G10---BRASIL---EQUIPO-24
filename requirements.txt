@@ -11,6 +11,7 @@ pyflakes
 fastapi
 uvicorn
 python-multipart
+httpx
 
 #Testes
 pytest
