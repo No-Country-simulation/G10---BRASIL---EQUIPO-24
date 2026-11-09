@@ -204,7 +204,7 @@ with aba_triagem:
             if r["status"] == "erro":
                 st.info("O processamento teve erro: o documento foi enviado à revisão humana, sem perda de dados.")
                 mostrar_diagnostico(erros_do_registro(r) or [d["justificativa_roteamento"]])
-            aba_json, aba_resumo = st.tabs(["{ } JSON", "📋 Resumo organizado"])
+            aba_resumo, aba_json = st.tabs(["📋 Resumo organizado", "{ } JSON"])
             with aba_json:
                 mostrar_json(r, f"{r['documento_id']}.json", "dl_resultado")
             with aba_resumo:
