@@ -1,9 +1,8 @@
 """
 app.py: ETAPA 8 do MediFlow (painel Streamlit: triagem + auditoria humana + regras)
-Novo layout perfumado
 
 COMO RODAR:
-    streamlit run app2.py
+    streamlit run app.py
 
 O Streamlit transforma um script Python em página web. A cada clique, o script
 roda de novo de cima para baixo; por isso guardamos coisas em `st.session_state`.
@@ -16,18 +15,19 @@ ABAS:
   4. Histórico         : o que já foi gravado no bucket.
 """
 
-import json
-from datetime import datetime
 
 import streamlit as st
+import json
+import os
+from datetime import datetime
 
 import auditoria
 from config import CONFIG_PADRAO, carregar_config, salvar_config
+from diagnostico import diagnosticar
 from extractor import ErroExtracao, criar_cliente
 from graph import triar_documento
 from schemas import DestinoRoteamento, TipoDocumento
 from storage import criar_armazenamento
-from diagnostico import diagnosticar
 
 st.set_page_config(page_title="MediFlow", page_icon="🏥", layout="wide")
 
@@ -47,6 +47,7 @@ def obter_armazenamento():
 
 
 armazenamento = obter_armazenamento()
+
 
 def mostrar_diagnostico(erros_brutos: list[str]) -> None:
     """Mostra cada erro técnico como um aviso claro: o que houve, o que fazer, e o texto cru num expansor."""
@@ -132,8 +133,18 @@ st.caption(
     f"(bucket `{armazenamento.bucket}`) · ⚠️ use apenas dados FICTÍCIOS"
 )
 
-aba_triagem, aba_auditoria, aba_regras, aba_historico = st.tabs(
-    ["📥 Nova triagem", "🧑‍⚕️ Auditoria humana", "⚙️ Regras de triagem", "🗄️ Histórico"]
+# Botões para a API (FastAPI/uvicorn): só aparecem se API_URL estiver definida.
+# No Streamlit Community Cloud o uvicorn NÃO fica acessível (só a porta do Streamlit é exposta);
+# lá, use a aba "📖 API" abaixo, que mostra a documentação sem precisar do servidor.
+URL_API = os.getenv("API_URL", "").rstrip("/")
+if URL_API:
+    b1, b2, b3, _ = st.columns([1, 1, 1, 3])
+    b1.link_button("📖 Swagger (API no ar)", f"{URL_API}/docs", use_container_width=True)
+    b2.link_button("📘 ReDoc", f"{URL_API}/redoc", use_container_width=True)
+    b3.link_button("💚 Saúde da API", f"{URL_API}/saude", use_container_width=True)
+
+aba_triagem, aba_auditoria, aba_regras, aba_historico, aba_api = st.tabs(
+    ["📥 Nova triagem", "🧑‍⚕️ Auditoria humana", "⚙️ Regras de triagem", "🗄️ Histórico", "📖 API"]
 )
 
 # ===========================================================================
@@ -333,3 +344,97 @@ with aba_historico:
     abrir = st.selectbox("Ver conteúdo de um .json", [""] + [o for o in objetos if o.endswith(".json")])
     if abrir:
         mostrar_json(armazenamento.ler_json(abrir), abrir.split("/")[-1], "dl_historico")
+
+
+# ===========================================================================
+# ABA 5: documentação da API (gerada do próprio FastAPI, sem precisar do uvicorn)
+# ===========================================================================
+with aba_api:
+    from main import app as api_app  # import aqui: só carrega o FastAPI quando a aba existe
+
+    spec = api_app.openapi()
+    st.subheader(f"{spec['info']['title']} · API v{spec['info']['version']}")
+    st.caption(spec["info"].get("description", ""))
+    st.info(
+        "Documentação gerada automaticamente pelo FastAPI. O Swagger (`/docs`) exige o uvicorn, que o Streamlit "
+        "Cloud não expõe; por isso, no fim desta aba há um **testador de endpoints** que chama a API em memória."
+    )
+    st.download_button(
+        "⬇️ Baixar openapi.json",
+        json.dumps(spec, ensure_ascii=False, indent=2),
+        file_name="openapi.json",
+        mime="application/json",
+    )
+    for caminho, metodos in spec["paths"].items():
+        for metodo, op in metodos.items():
+            with st.expander(f"`{metodo.upper()}` {caminho} — {op.get('summary', '')}"):
+                if op.get("description"):
+                    st.markdown(op["description"])
+                params = op.get("parameters", [])
+                if params:
+                    st.markdown("**Parâmetros:** " + ", ".join(f"`{p['name']}` ({p['in']})" for p in params))
+                if "requestBody" in op:
+                    st.markdown("**Corpo da requisição:**")
+                    st.json(op["requestBody"]["content"])
+                st.markdown("**Respostas:** " + ", ".join(f"`{c}` {r.get('description', '')}" for c, r in op["responses"].items()))
+    # -----------------------------------------------------------------------
+    # "Try it out" sem servidor: o TestClient chama o FastAPI EM MEMÓRIA, passando por
+    # toda a validação, dependências e códigos HTTP reais, como o Swagger faria.
+    # -----------------------------------------------------------------------
+    st.divider()
+    st.subheader("🧪 Testar endpoints (equivalente ao 'Try it out' do Swagger)")
+    from fastapi.testclient import TestClient
+
+    EXEMPLOS = {
+        "/triagem": {
+            "documento_id": "DOC-CLIN-2026-9001",
+            "tipo_arquivo": "TEXTO",
+            "canal_origem": "Painel_Streamlit",
+            "documento_texto": "Receituário: Paciente Maria Teste, 40 anos. Dr. João Silva CRM 123456-SP. "
+            "Amoxicilina 500 mg, 1 cápsula de 8/8h por 7 dias. Diagnóstico: faringite aguda.",
+        },
+        "/auditoria/{documento_id}/decisao": {
+            "decisao": "aprovado", "auditor": "Auditor Teste", "observacao": "Conferido.",
+        },
+    }
+    opcoes = [f"{m.upper()} {p}" for p, ms in spec["paths"].items() for m in ms]
+    escolha = st.selectbox("Endpoint", opcoes, key="api_endpoint")
+    metodo, caminho = escolha.split(" ", 1)
+    url = caminho
+    for nome in [t.strip("{}") for t in caminho.split("/") if t.startswith("{")]:
+        valor = st.text_input(f"Parâmetro de caminho `{nome}`", key=f"api_{nome}")
+        url = url.replace("{" + nome + "}", valor)
+
+    kwargs, pronto = {}, True
+    if caminho == "/triagem/arquivo":
+        arq = st.file_uploader("Arquivo (PDF, PNG, JPG ou WEBP)", type=["pdf", "png", "jpg", "jpeg", "webp"], key="api_arq")
+        doc_id = st.text_input("documento_id", "DOC-CLIN-2026-9002", key="api_docid")
+        canal = st.text_input("canal_origem (opcional)", "Painel_Streamlit", key="api_canal")
+        pronto = arq is not None
+        if pronto:
+            kwargs = {"files": {"file": (arq.name, arq.getvalue(), arq.type)},
+                      "data": {"documento_id": doc_id, "canal_origem": canal}}
+    elif metodo == "POST":
+        corpo = st.text_area("Corpo JSON", json.dumps(EXEMPLOS.get(caminho, {}), ensure_ascii=False, indent=2),
+                             height=220, key=f"api_corpo_{caminho}")
+        try:
+            kwargs = {"json": json.loads(corpo)}
+        except json.JSONDecodeError as e:
+            pronto = False
+            st.error(f"JSON inválido: {e}")
+
+    if st.button("▶️ Executar", type="primary", disabled=not pronto, key="api_exec"):
+        with st.spinner("Chamando a API..."):
+            try:
+                resp = TestClient(api_app).request(metodo, url, **kwargs)
+                st.markdown(f"**Status:** `{resp.status_code}`")
+                try:
+                    st.json(resp.json())
+                except ValueError:
+                    st.code(resp.text)
+            except Exception as e:  # nunca derruba o painel
+                st.error(f"Falha ao chamar a API: {e}")
+    st.caption("A chamada usa o mesmo armazenamento e a mesma chave Gemini configurados neste painel.")
+
+    with st.expander("Esquemas (modelos de dados)"):
+        st.json(spec.get("components", {}).get("schemas", {}), expanded=False)
