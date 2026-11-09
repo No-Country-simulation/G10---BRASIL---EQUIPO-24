@@ -30,6 +30,8 @@ from graph import triar_documento
 from schemas import RequisicaoTriagem, RespostaTriagem, TipoArquivo
 from storage import ArmazenamentoBase, criar_armazenamento
 
+import streamlit as st
+
 app = FastAPI(
     title="MediFlow",
     description="Agente autônomo para triagem, extração e roteamento de documentos clínicos.",
