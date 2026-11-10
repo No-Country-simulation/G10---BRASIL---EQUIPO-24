@@ -5,7 +5,7 @@
 Projeto da **Equipe 24** no **Hackathon ONE G10** (Oracle Next Education & Alura), pela plataforma NoCountry.
 A descrição original do desafio está em [`MedFlow.pdf`](MedFlow.pdf).
 
-🌐 **Aplicação online:** https://no-country-simulation-g10---brasil---equipo-24-app-inici-eagzc9.streamlit.app/
+🌐 **Aplicação online:** [https://no-country-simulation-g10---brasil---equipo-24-app-inici-eagzc9.streamlit.app/](https://g10---brasil---equipo-24-mediflow.streamlit.app/)
 
 ## Resumo
 
